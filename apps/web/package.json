@@ -16,6 +16,7 @@
     "ai": "latest",
     "next": "^15.3.0",
     "node-quickbooks": "^2.0.46",
+    "node-quickbooks-promise": "^1.0.5",
     "openai": "^5.8.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

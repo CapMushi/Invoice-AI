@@ -189,20 +189,7 @@ button.secondary {
 
 /* --- Dual-panel Modern Invoice UI --- */
 
-/* Reset body and html to eliminate main scroll */
-:global(html) {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
-:global(body) {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-}
+/* Global styles moved to globals.css */
 
 .mainContainer {
   min-height: 100vh;

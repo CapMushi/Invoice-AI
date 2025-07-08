@@ -1,41 +1,6 @@
 import { z } from 'zod';
 import { tool } from 'ai';
-import { cookies } from 'next/headers';
-
-async function getQuickBooksTokens() {
-  const cookieStore = await cookies();
-  const cookie = cookieStore.get('quickbooks_tokens');
-  if (!cookie) return null;
-  try {
-    return JSON.parse(cookie.value);
-  } catch {
-    return null;
-  }
-}
-
-async function quickbooksApiRequest(path: string, method = 'GET', body?: any) {
-  const tokens = await getQuickBooksTokens();
-  if (!tokens || !tokens.access_token || !tokens.realmId) {
-    throw new Error('QuickBooks not authenticated');
-  }
-  const environment = process.env.QUICKBOOKS_ENVIRONMENT || 'sandbox';
-  const baseUrl = `https://${environment === 'sandbox' ? 'sandbox-' : ''}quickbooks.api.intuit.com/v3/company/${tokens.realmId}`;
-  const url = `${baseUrl}${path}`;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${tokens.access_token}`,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.Fault?.Error?.[0]?.Message || `QuickBooks API error: ${res.status}`);
-  }
-  return data;
-}
+import { getQuickBooksClient, handleSDKError } from './quickbooksClient';
 
 export const invoiceTools = {
   getInvoice: tool({
@@ -45,10 +10,16 @@ export const invoiceTools = {
     }),
     execute: async ({ invoiceId }) => {
       try {
-        const data = await quickbooksApiRequest(`/invoice/${invoiceId}`);
-        return data;
+        console.log(`Retrieving invoice ${invoiceId} using SDK...`);
+        const qbo = await getQuickBooksClient();
+        
+        const invoice = await qbo.getInvoice(invoiceId);
+        console.log(`Successfully retrieved invoice ${invoiceId}`);
+        
+        return invoice;
       } catch (error: any) {
-        return { error: error.message };
+        console.error(`Failed to retrieve invoice ${invoiceId}:`, error);
+        return handleSDKError(error);
       }
     },
   }),
@@ -62,14 +33,33 @@ export const invoiceTools = {
     }),
     execute: async ({ start, maxResults, filter }) => {
       try {
-        let query = 'SELECT * FROM Invoice';
-        if (filter) query += ` WHERE ${filter}`;
-        if (maxResults) query += ` MAXRESULTS ${maxResults}`;
-        if (start) query += ` STARTPOSITION ${start}`;
-        const data = await quickbooksApiRequest(`/query?query=${encodeURIComponent(query)}`);
-        return data;
+        console.log('Listing invoices using SDK with filters:', { start, maxResults, filter });
+        const qbo = await getQuickBooksClient();
+        
+        // Build criteria object for SDK
+        const criteria: any = {};
+        
+        if (filter) {
+          // Parse filter string and convert to SDK criteria format
+          // Example: "CustomerRef = '123'" becomes criteria with where clause
+          criteria.where = filter;
+        }
+        
+        if (maxResults) {
+          criteria.limit = maxResults;
+        }
+        
+        if (start) {
+          criteria.offset = start;
+        }
+        
+        const invoices = await qbo.findInvoices(criteria);
+        console.log(`Successfully retrieved ${(invoices as any)?.QueryResponse?.Invoice?.length || 0} invoices`);
+        
+        return invoices;
       } catch (error: any) {
-        return { error: error.message };
+        console.error('Failed to list invoices:', error);
+        return handleSDKError(error);
       }
     },
   }),
@@ -81,10 +71,16 @@ export const invoiceTools = {
     }),
     execute: async ({ invoice }) => {
       try {
-        const data = await quickbooksApiRequest('/invoice', 'POST', invoice);
-        return data;
+        console.log('Creating new invoice using SDK...');
+        const qbo = await getQuickBooksClient();
+        
+        const newInvoice = await qbo.createInvoice(invoice);
+        console.log(`Successfully created invoice with ID: ${(newInvoice as any)?.Id}`);
+        
+        return newInvoice;
       } catch (error: any) {
-        return { error: error.message };
+        console.error('Failed to create invoice:', error);
+        return handleSDKError(error);
       }
     },
   }),
@@ -92,14 +88,21 @@ export const invoiceTools = {
   updateInvoice: tool({
     description: 'Update an existing invoice',
     parameters: z.object({
-      invoice: z.any().describe('Invoice object with updated fields'),
+      invoice: z.any().describe('Invoice object with updated fields including Id and SyncToken'),
     }),
     execute: async ({ invoice }) => {
       try {
-        const data = await quickbooksApiRequest('/invoice', 'POST', invoice);
-        return data;
+        console.log(`Updating invoice ${(invoice as any).Id} using SDK...`);
+        const qbo = await getQuickBooksClient();
+        
+        // For voiding: include void: true in the invoice object
+        const updatedInvoice = await qbo.updateInvoice(invoice);
+        console.log(`Successfully updated invoice ${(invoice as any).Id}`);
+        
+        return updatedInvoice;
       } catch (error: any) {
-        return { error: error.message };
+        console.error(`Failed to update invoice ${(invoice as any)?.Id}:`, error);
+        return handleSDKError(error);
       }
     },
   }),
@@ -111,26 +114,17 @@ export const invoiceTools = {
     }),
     execute: async ({ invoiceId }) => {
       try {
-        // First, get the invoice to get its current state and sync token
-        const getResponse = await quickbooksApiRequest(`/invoice/${invoiceId}`);
+        console.log(`Deleting invoice ${invoiceId} using SDK...`);
+        const qbo = await getQuickBooksClient();
         
-        const invoice = getResponse.QueryResponse?.Invoice?.[0];
-        if (!invoice) {
-          throw new Error(`Invoice with ID ${invoiceId} not found`);
-        }
+        // SDK handles the get-and-delete process automatically
+        const deletedInvoice = await qbo.deleteInvoice(invoiceId);
+        console.log(`Successfully deleted invoice ${invoiceId}`);
         
-        // QuickBooks requires the sync token for delete operations
-        const deletePayload = {
-          Id: invoiceId,
-          SyncToken: invoice.SyncToken
-        };
-        
-        // QuickBooks "deletes" by setting status to Deleted via POST with operation=delete
-        const data = await quickbooksApiRequest(`/invoice?operation=delete`, 'POST', deletePayload);
-        
-        return data;
+        return deletedInvoice;
       } catch (error: any) {
-        return { error: error.message };
+        console.error(`Failed to delete invoice ${invoiceId}:`, error);
+        return handleSDKError(error);
       }
     },
   }),
@@ -143,13 +137,27 @@ export const invoiceTools = {
     }),
     execute: async ({ invoiceId, email }) => {
       try {
-        // QuickBooks Online API send endpoint: POST /invoice/{id}/send?sendTo={email}
-        // The email address is sent as a query parameter, not in the request body
-        const data = await quickbooksApiRequest(`/invoice/${invoiceId}/send?sendTo=${encodeURIComponent(email)}`, 'POST');
+        console.log(`Emailing invoice ${invoiceId} PDF to ${email} using SDK...`);
+        const qbo = await getQuickBooksClient();
         
-        return data;
+        // First verify the invoice exists
+        console.log(`Verifying invoice ${invoiceId} exists...`);
+        const invoice = await qbo.getInvoice(invoiceId);
+        
+        if (!invoice) {
+          throw new Error(`Invoice with ID ${invoiceId} not found`);
+        }
+        
+        console.log(`Invoice found: ${(invoice as any).DocNumber}, Customer: ${(invoice as any).CustomerRef?.name}`);
+        
+        // Send the invoice PDF using SDK
+        const result = await qbo.sendInvoicePdf(invoiceId, email);
+        console.log(`Successfully sent invoice ${invoiceId} PDF to ${email}`);
+        
+        return result;
       } catch (error: any) {
-        return { error: error.message };
+        console.error(`Failed to email invoice ${invoiceId} PDF to ${email}:`, error);
+        return handleSDKError(error);
       }
     },
   }),
