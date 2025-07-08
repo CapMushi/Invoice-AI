@@ -11,10 +11,15 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^1.3.23",
     "@repo/ui": "*",
+    "ai": "latest",
     "next": "^15.3.0",
+    "node-quickbooks": "^2.0.46",
+    "openai": "^5.8.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.75"
   },
   "devDependencies": {
     "@repo/eslint-config": "*",
