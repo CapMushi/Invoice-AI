@@ -25,11 +25,11 @@ export const invoiceTools = {
   }),
 
   listInvoices: tool({
-    description: 'List invoices with optional filters',
+    description: 'List ALL invoices with optional filters. Always returns ALL invoices unless specifically limited. Use "unpaid" to filter unpaid invoices, "paid" for paid invoices, or specify a customer name. Do not limit results unless explicitly requested.',
     parameters: z.object({
       start: z.number().optional().describe('Start position for pagination'),
-      maxResults: z.number().optional().describe('Maximum number of invoices to return'),
-      filter: z.string().optional().describe('Query filter for invoices'),
+      maxResults: z.number().optional().describe('Maximum number of invoices to return - leave empty to get ALL invoices'),
+      filter: z.string().optional().describe('Filter type: "unpaid", "paid", or customer name'),
     }),
     execute: async ({ start, maxResults, filter }) => {
       try {
@@ -39,14 +39,26 @@ export const invoiceTools = {
         // Build criteria object for SDK
         const criteria: any = {};
         
+        // For now, let's fetch all invoices and filter client-side to avoid QB API issues
+        let clientSideFilter = null;
         if (filter) {
-          // Parse filter string and convert to SDK criteria format
-          // Example: "CustomerRef = '123'" becomes criteria with where clause
-          criteria.where = filter;
+          const filterLower = filter.toLowerCase();
+          if (filterLower.includes('unpaid') || filterLower.includes('open') || filterLower.includes('outstanding')) {
+            clientSideFilter = 'unpaid';
+          } else if (filterLower.includes('paid') || filterLower.includes('closed')) {
+            clientSideFilter = 'paid';
+          } else if (filterLower.includes('overdue')) {
+            clientSideFilter = 'overdue';
+          } else {
+            clientSideFilter = filter; // customer name or other
+          }
         }
         
         if (maxResults) {
           criteria.limit = maxResults;
+        } else {
+          // Set a very high limit to ensure we get ALL invoices when no limit is specified
+          criteria.limit = 1000;
         }
         
         if (start) {
@@ -54,7 +66,44 @@ export const invoiceTools = {
         }
         
         const invoices = await qbo.findInvoices(criteria);
-        console.log(`Successfully retrieved ${(invoices as any)?.QueryResponse?.Invoice?.length || 0} invoices`);
+        const initialCount = (invoices as any)?.QueryResponse?.Invoice?.length || 0;
+        console.log(`Successfully retrieved ${initialCount} invoices from QuickBooks`);
+        
+        // Apply client-side filtering if needed
+        if (clientSideFilter && invoices && (invoices as any).QueryResponse?.Invoice) {
+          const allInvoices = (invoices as any).QueryResponse.Invoice;
+          let filteredInvoices = allInvoices;
+          
+          if (clientSideFilter === 'unpaid') {
+            filteredInvoices = allInvoices.filter((inv: any) => 
+              inv.Balance && parseFloat(inv.Balance) > 0
+            );
+          } else if (clientSideFilter === 'paid') {
+            filteredInvoices = allInvoices.filter((inv: any) => 
+              !inv.Balance || parseFloat(inv.Balance) === 0
+            );
+          } else if (clientSideFilter === 'overdue') {
+            const today = new Date();
+            filteredInvoices = allInvoices.filter((inv: any) => {
+              if (!inv.DueDate || !inv.Balance) return false;
+              const dueDate = new Date(inv.DueDate);
+              return dueDate < today && parseFloat(inv.Balance) > 0;
+            });
+          } else {
+            // Filter by customer name
+            filteredInvoices = allInvoices.filter((inv: any) => 
+              inv.CustomerRef?.name?.toLowerCase().includes(clientSideFilter.toLowerCase())
+            );
+          }
+          
+          console.log(`Filtered to ${filteredInvoices.length} invoices based on filter: ${clientSideFilter}`);
+          
+          return {
+            QueryResponse: {
+              Invoice: filteredInvoices
+            }
+          };
+        }
         
         return invoices;
       } catch (error: any) {

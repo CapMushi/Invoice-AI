@@ -27,7 +27,17 @@ export async function POST(req: NextRequest) {
       tools: invoiceTools,
       toolChoice: 'auto',
       maxSteps: 3,
-      prompt: message,
+      prompt: `${message}
+
+CRITICAL RULES:
+1. ALWAYS use the listInvoices tool when asked to list, show, get, or display invoices
+2. NEVER generate invoice data in text format
+3. NEVER provide sample or made-up invoice data
+4. The listInvoices tool will return ALL invoices unless specifically filtered
+5. You must use the appropriate tool even for simple requests like "show all invoices"
+6. Do not apologize or explain - just call the tool
+
+For any invoice-related request, use the appropriate tool first before providing any response.`,
       // tokens will be injected in tool execution context by the tool definitions
     });
     return NextResponse.json({ result });

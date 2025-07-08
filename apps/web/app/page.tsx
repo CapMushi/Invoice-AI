@@ -201,11 +201,17 @@ export default function HomePage() {
     setChatLoading(true);
     try {
       // Send the user message as { message: userMessage }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout for QuickBooks API
+      
       const res = await fetch("/api/ai/invoice-tool", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage }),
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
       const data = await res.json();
       if (!res.ok) {
         await streamAIResponse(data.error || "Sorry, I couldn't process your request.");
@@ -214,38 +220,203 @@ export default function HomePage() {
         const result = data.result;
         let responseText = result?.text || "";
         let invoiceDataFound = false;
+        
+
+        
+
+
+        // Helper function to parse invoice data from text response
+        const parseInvoicesFromText = (text: string) => {
+          if (!text) return null;
+          
+          const invoices = [];
+          
+          // Pattern for the single-line format in chat (with optional Status)
+          // Matches: "1. **Invoice ID:** 145 - **Customer:** Amy's Bird Sanctuary - **Date:** 2025-07-08 - **Due Date:** 2025-08-07 - **Total Amount:** $560 - **Balance:** $560 - **Status:** Need to Print"
+          const singleLinePattern = /\d+\.\s*\*\*Invoice ID:\*\*\s*(\d+)\s*-\s*\*\*Customer:\*\*\s*([^-]+?)\s*-\s*\*\*Date:\*\*\s*([\d-]+)\s*-\s*\*\*Due Date:\*\*\s*([\d-]+)\s*-\s*\*\*Total Amount:\*\*\s*\$?([\d.]+)\s*-\s*\*\*Balance:\*\*\s*\$?([\d.]+)(?:\s*-\s*\*\*Status:\*\*\s*[^0-9]+)?/g;
+          
+          let match;
+          while ((match = singleLinePattern.exec(text)) !== null) {
+            if (match && match.length >= 7) {
+              const invoice = {
+                Id: match[1] || '',
+                DocNumber: match[1] || '', // Using ID as DocNumber since DocNumber is not in this format
+                TxnDate: match[3] || '', // Date is at position 3
+                CustomerRef: {
+                  name: match[2]?.trim() || ''
+                },
+                TotalAmt: parseFloat(match[5] || '0'),
+                DueDate: match[4] || '',
+                Balance: parseFloat(match[6] || '0')
+              };
+              invoices.push(invoice);
+            }
+          }
+          
+          // If single-line pattern didn't work, try the multi-line structured format
+          if (invoices.length === 0) {
+            const multiLinePattern = /\d+\.\s*\*\*Invoice ID:\*\*\s*(\d+)[\s\S]*?-\s*\*\*Doc Number:\*\*\s*(\d+)[\s\S]*?-\s*\*\*Customer:\*\*\s*([^\n-]+?)[\s\S]*?-\s*\*\*Total Amount:\*\*\s*\$?([\d.]+)[\s\S]*?-\s*\*\*Due Date:\*\*\s*([\d-]+)[\s\S]*?-\s*\*\*Balance:\*\*\s*\$?([\d.]+)/g;
+            
+            while ((match = multiLinePattern.exec(text)) !== null) {
+              if (match && match.length >= 7) {
+                const invoice = {
+                  Id: match[1] || '',
+                  DocNumber: match[2] || '',
+                  TxnDate: match[5] || '',
+                  CustomerRef: {
+                    name: match[3]?.trim() || ''
+                  },
+                  TotalAmt: parseFloat(match[4] || '0'),
+                  DueDate: match[5] || '',
+                  Balance: parseFloat(match[6] || '0')
+                };
+                invoices.push(invoice);
+              }
+            }
+          }
+          
+          // If still no invoices, try the basic structured format
+          if (invoices.length === 0) {
+            const basicPattern = /\*\*Invoice ID:\*\*\s*(\d+)[\s\S]*?\*\*Customer:\*\*\s*([^\n*]+)[\s\S]*?\*\*Total Amount:\*\*\s*\$?([\d.]+)[\s\S]*?\*\*Due Date:\*\*\s*([\d-]+)[\s\S]*?\*\*Balance:\*\*\s*\$?([\d.]+)/g;
+            
+            while ((match = basicPattern.exec(text)) !== null) {
+              if (match && match.length >= 6) {
+                const invoice = {
+                  Id: match[1] || '',
+                  DocNumber: match[1] || '',
+                  TxnDate: match[4] || '',
+                  CustomerRef: {
+                    name: match[2]?.trim() || ''
+                  },
+                  TotalAmt: parseFloat(match[3] || '0'),
+                  DueDate: match[4] || '',
+                  Balance: parseFloat(match[5] || '0')
+                };
+                invoices.push(invoice);
+              }
+            }
+          }
+          
+          return invoices.length > 0 ? invoices : null;
+        };
+
+        // Helper function to extract invoice data from various response formats
+        const extractInvoiceData = (data: any) => {
+          if (!data) return null;
+          
+          // Try different possible locations for invoice data
+          const possiblePaths = [
+            data?.QueryResponse?.Invoice,
+            data?.Invoice,
+            data?.result?.QueryResponse?.Invoice,
+            data?.result?.Invoice,
+            data?.result,
+            data?.toolResults?.[0]?.result?.QueryResponse?.Invoice,
+            data?.toolResults?.[0]?.result?.Invoice,
+            data?.toolResults?.[0]?.result,
+            data
+          ];
+          
+          for (let i = 0; i < possiblePaths.length; i++) {
+            const path = possiblePaths[i];
+            
+            if (path) {
+              if (Array.isArray(path)) {
+                // Filter out any non-invoice objects
+                const invoices = path.filter(item => item && typeof item === 'object' && item.Id);
+                if (invoices.length > 0) return invoices;
+              } else if (path && typeof path === 'object' && path.Id) {
+                return [path];
+              }
+            }
+          }
+          
+          // If direct paths don't work, try to find invoices in nested structures
+          const searchForInvoices = (obj: any): any[] => {
+            if (!obj || typeof obj !== 'object') return [];
+            
+            let found: any[] = [];
+            
+            // Check if current object is an invoice
+            if (obj.Id && (obj.DocNumber !== undefined || obj.TotalAmt !== undefined || obj.CustomerRef)) {
+              found.push(obj);
+            }
+            
+            // Recursively search in nested objects/arrays
+            for (const key in obj) {
+              if (obj.hasOwnProperty(key)) {
+                const value = obj[key];
+                if (Array.isArray(value)) {
+                  found = found.concat(value.filter(item => 
+                    item && typeof item === 'object' && item.Id && 
+                    (item.DocNumber !== undefined || item.TotalAmt !== undefined || item.CustomerRef)
+                  ));
+                } else if (value && typeof value === 'object') {
+                  found = found.concat(searchForInvoices(value));
+                }
+              }
+            }
+            
+            return found;
+          };
+          
+          const foundInvoices = searchForInvoices(data);
+          return foundInvoices.length > 0 ? foundInvoices : null;
+        };
 
         // Check for tool calls that returned results
         if (result?.toolCalls) {
-          for (const toolCall of result.toolCalls) {
-            const toolResult = result.toolResults?.find((tr: any) => tr.toolCallId === toolCall.toolCallId);
+          // First check if any tool calls have errors to prevent infinite loops
+          const hasErrors = result.toolResults?.some((tr: any) => tr.result?.error);
+          
+          if (hasErrors) {
+            const errorResult = result.toolResults?.find((tr: any) => tr.result?.error);
+            invoiceDataFound = true;
+            responseText = `Error: ${errorResult?.result?.error || 'Unknown error occurred'}`;
+          } else {
+            for (const toolCall of result.toolCalls) {
+              const toolResult = result.toolResults?.find((tr: any) => tr.toolCallId === toolCall.toolCallId);
             
             if (toolCall.toolName === 'listInvoices' || toolCall.toolName === 'getInvoice') {
               if (toolResult?.result) {
-                invoiceDataFound = true;
-                if (toolCall.toolName === 'listInvoices') {
-                  // Handle list invoices response
-                  const invoiceList = toolResult.result?.QueryResponse?.Invoice || [];
-                  if (invoiceList.length > 0) {
-                    setInvoices(invoiceList);
-                    responseText = `Found ${invoiceList.length} invoice(s). Check the invoices panel to view them.`;
+                // Check if there's an error in the tool result
+                if (toolResult.result.error) {
+                  invoiceDataFound = true;
+                  responseText = `Error retrieving invoices: ${toolResult.result.error}`;
+                } else {
+                  // Extract invoice data using the helper function
+                  const extractedInvoices = extractInvoiceData(toolResult.result);
+                  
+                  if (extractedInvoices && extractedInvoices.length > 0) {
+                    invoiceDataFound = true;
+                    
+                    if (toolCall.toolName === 'listInvoices') {
+                      // Handle list invoices response - always set invoices in cards
+                      setInvoices(extractedInvoices);
+                      responseText = `Found ${extractedInvoices.length} unpaid invoice(s). Check the invoices panel to view them.`;
+                    } else if (toolCall.toolName === 'getInvoice') {
+                      // Handle single invoice response
+                      const invoice = extractedInvoices[0];
+                      if (invoice && invoice.Id) {
+                        setSelectedInvoiceId(invoice.Id);
+                        setSelectedInvoice(invoice);
+                        // Add to invoices list if not already there
+                        setInvoices(prev => {
+                          const exists = prev.find(inv => inv.Id === invoice.Id);
+                          return exists ? prev : [invoice, ...prev];
+                        });
+                        responseText = `Invoice #${invoice.DocNumber || invoice.Id} details loaded. Check the invoices panel to view details.`;
+                      }
+                    }
                   } else {
-                    responseText = "No invoices found in your QuickBooks account.";
-                  }
-                } else if (toolCall.toolName === 'getInvoice') {
-                  // Handle single invoice response
-                  const invoice = toolResult.result?.QueryResponse?.Invoice?.[0] || toolResult.result;
-                  if (invoice && invoice.Id) {
-                    setSelectedInvoiceId(invoice.Id);
-                    setSelectedInvoice(invoice);
-                    // Add to invoices list if not already there
-                    setInvoices(prev => {
-                      const exists = prev.find(inv => inv.Id === invoice.Id);
-                      return exists ? prev : [invoice, ...prev];
-                    });
-                    responseText = `Invoice #${invoice.DocNumber || invoice.Id} details loaded. Check the invoices panel to view details.`;
+                    responseText = toolCall.toolName === 'listInvoices' 
+                      ? "No invoices found matching your criteria." 
+                      : "Invoice not found.";
                   }
                 }
+              } else {
+                invoiceDataFound = true;
+                responseText = `Error: Unable to retrieve invoice data. Please try again.`;
               }
             } else if (toolCall.toolName === 'deleteInvoice') {
               invoiceDataFound = true;
@@ -310,6 +481,50 @@ export default function HomePage() {
             }
           }
         }
+      }
+
+        // If no invoice data was found in tool calls, check for direct invoice data in response
+        if (!invoiceDataFound) {
+          // Try to extract invoice data from the main result
+          const directInvoiceData = extractInvoiceData(result);
+          
+          if (directInvoiceData && directInvoiceData.length > 0) {
+            invoiceDataFound = true;
+            
+            // Check if it's a single invoice or multiple invoices
+            if (directInvoiceData.length === 1) {
+              const invoice = directInvoiceData[0];
+              setSelectedInvoiceId(invoice.Id);
+              setSelectedInvoice(invoice);
+              // Add to invoices list if not already there
+              setInvoices(prev => {
+                const exists = prev.find(inv => inv.Id === invoice.Id);
+                return exists ? prev : [invoice, ...prev];
+              });
+              responseText = `Invoice #${invoice.DocNumber || invoice.Id} details loaded. Check the invoices panel to view details.`;
+            } else {
+              // Multiple invoices
+              setInvoices(directInvoiceData);
+              responseText = `Found ${directInvoiceData.length} invoice(s). Check the invoices panel to view them.`;
+            }
+          } else {
+            // Check if the user's message suggests they want invoice data
+            const userMessageLower = userMessage.toLowerCase();
+            const invoiceKeywords = ['invoice', 'invoices', 'show', 'list', 'get', 'find', 'display'];
+            const containsInvoiceKeywords = invoiceKeywords.some(keyword => userMessageLower.includes(keyword));
+            
+            if (containsInvoiceKeywords && result?.text) {
+              // If the response text contains invoice information, try to parse it
+              const parsedInvoices = parseInvoicesFromText(result.text);
+              
+              if (parsedInvoices && parsedInvoices.length > 0) {
+                invoiceDataFound = true;
+                setInvoices(parsedInvoices);
+                responseText = `Found ${parsedInvoices.length} invoice(s). Check the invoices panel to view them.`;
+              }
+            }
+          }
+        }
 
         // If no invoice data was found, show the original response
         if (!invoiceDataFound) {
@@ -319,7 +534,11 @@ export default function HomePage() {
         await streamAIResponse(responseText);
       }
     } catch (err: any) {
-      await streamAIResponse(err.message || "Sorry, something went wrong.");
+      if (err.name === 'AbortError') {
+        await streamAIResponse("Request timed out. QuickBooks operations can take up to a minute. Please try again or use a more specific query.");
+      } else {
+        await streamAIResponse(err.message || "Sorry, something went wrong.");
+      }
     } finally {
       setChatLoading(false);
     }
