@@ -27,6 +27,11 @@ interface ChatMessage {
 
 export default function HomePage() {
   const [invoices, setInvoices] = useState<InvoiceSummary[]>([]);
+  
+  // Debug logging when invoices state changes
+  // useEffect(() => {
+  //   console.log('🔍 Invoices state changed:', invoices);
+  // }, [invoices]);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -221,6 +226,12 @@ export default function HomePage() {
         let responseText = result?.text || "";
         let invoiceDataFound = false;
         
+        // Debug logging to understand the response structure
+        // console.log('🔍 API Response:', data);
+        // console.log('🔍 Result:', result);
+        // console.log('🔍 Tool Calls:', result?.toolCalls);
+        // console.log('🔍 Tool Results:', result?.toolResults);
+        
 
         
 
@@ -384,16 +395,39 @@ export default function HomePage() {
                   invoiceDataFound = true;
                   responseText = `Error retrieving invoices: ${toolResult.result.error}`;
                 } else {
-                  // Extract invoice data using the helper function
-                  const extractedInvoices = extractInvoiceData(toolResult.result);
+                  // For listInvoices, directly access the expected structure
+                  let extractedInvoices = null;
+                  
+                  if (toolCall.toolName === 'listInvoices') {
+                    // listInvoices returns: { QueryResponse: { Invoice: [...] }, summary: "...", count: N, filterApplied: "..." }
+                    // console.log('🔍 listInvoices toolResult.result:', toolResult.result);
+                    // console.log('🔍 QueryResponse:', toolResult.result.QueryResponse);
+                    // console.log('🔍 Invoice array:', toolResult.result.QueryResponse?.Invoice);
+                    extractedInvoices = toolResult.result.QueryResponse?.Invoice || [];
+                  } else if (toolCall.toolName === 'getInvoice') {
+                    // getInvoice returns the invoice object directly with summary
+                    // Try to extract from the result structure
+                    extractedInvoices = extractInvoiceData(toolResult.result);
+                  }
+                  
+                  // console.log('🔍 Extracted invoices:', extractedInvoices);
                   
                   if (extractedInvoices && extractedInvoices.length > 0) {
                     invoiceDataFound = true;
                     
                     if (toolCall.toolName === 'listInvoices') {
                       // Handle list invoices response - always set invoices in cards
+                      // console.log('🔍 Setting invoices in state:', extractedInvoices);
                       setInvoices(extractedInvoices);
-                      responseText = `Found ${extractedInvoices.length} unpaid invoice(s). Check the invoices panel to view them.`;
+                      
+                      // Use the natural language summary from the tool result if available
+                      if (toolResult.result.summary) {
+                        responseText = toolResult.result.summary;
+                      } else {
+                        // Fallback to generic response
+                        const filterApplied = toolResult.result.filterApplied || 'invoices';
+                        responseText = `Found ${extractedInvoices.length} ${filterApplied}. Check the invoices panel to view them.`;
+                      }
                     } else if (toolCall.toolName === 'getInvoice') {
                       // Handle single invoice response
                       const invoice = extractedInvoices[0];
@@ -405,13 +439,31 @@ export default function HomePage() {
                           const exists = prev.find(inv => inv.Id === invoice.Id);
                           return exists ? prev : [invoice, ...prev];
                         });
-                        responseText = `Invoice #${invoice.DocNumber || invoice.Id} details loaded. Check the invoices panel to view details.`;
+                        
+                        // Use the natural language summary from the tool result if available
+                        if (toolResult.result.summary) {
+                          responseText = toolResult.result.summary;
+                        } else {
+                          responseText = `Invoice #${invoice.DocNumber || invoice.Id} details loaded. Check the invoices panel to view details.`;
+                        }
                       }
                     }
                   } else {
-                    responseText = toolCall.toolName === 'listInvoices' 
-                      ? "No invoices found matching your criteria." 
-                      : "Invoice not found.";
+                    // Check if we have a summary for zero results (important for "no invoices found" cases)
+                    if (toolCall.toolName === 'listInvoices' && toolResult.result.summary) {
+                      invoiceDataFound = true;
+                      responseText = toolResult.result.summary;
+                      // Even if no invoices found, clear the existing invoices array
+                      setInvoices([]);
+                    } else {
+                      responseText = toolCall.toolName === 'listInvoices' 
+                        ? "No invoices found matching your criteria." 
+                        : "Invoice not found.";
+                      // Clear invoices if no results for listInvoices
+                      if (toolCall.toolName === 'listInvoices') {
+                        setInvoices([]);
+                      }
+                    }
                   }
                 }
               } else {
