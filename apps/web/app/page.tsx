@@ -39,6 +39,10 @@ export default function HomePage() {
   const [authError, setAuthError] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
 
+  // Modal state
+  const [showAllInvoicesModal, setShowAllInvoicesModal] = useState(false);
+  const [modalCurrentIndex, setModalCurrentIndex] = useState(0);
+
   // Chat state
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { role: "ai", content: "Hello! How can I help you with your invoices?" },
@@ -594,6 +598,22 @@ export default function HomePage() {
     }
   };
 
+  // Handle modal navigation
+  const handleModalNavigation = (direction: 'prev' | 'next') => {
+    if (direction === 'prev' && modalCurrentIndex > 0) {
+      setModalCurrentIndex(modalCurrentIndex - 1);
+    } else if (direction === 'next' && modalCurrentIndex < invoices.length - 1) {
+      setModalCurrentIndex(modalCurrentIndex + 1);
+    }
+  };
+
+  // Handle modal invoice selection
+  const handleModalInvoiceSelect = (invoice: InvoiceSummary, index: number) => {
+    setSelectedInvoiceId(invoice.Id);
+    setModalCurrentIndex(index);
+    setShowAllInvoicesModal(false);
+  };
+
   if (checkingAuth) {
     return (
       <main className={styles.mainContainer}>
@@ -634,7 +654,18 @@ export default function HomePage() {
       <div className={styles.panelsWrapper}>
         {/* Left Panel: Invoice List + Detail */}
         <section className={styles.leftPanel}>
-          <h2 className={styles.panelTitle}>Invoices</h2>
+          <div className={styles.invoiceHeaderSection}>
+            <h2 className={styles.panelTitle}>Invoices</h2>
+            {invoices.length > 0 && (
+              <button 
+                className={styles.viewAllButton}
+                onClick={() => setShowAllInvoicesModal(true)}
+              >
+                View All ({invoices.length})
+              </button>
+            )}
+          </div>
+          
           {/* Auth error: show connect button */}
           {authError ? (
             <div style={{ textAlign: "center" }}>
@@ -656,7 +687,7 @@ export default function HomePage() {
               </div>
             </div>
           ) : (
-                        <div className={styles.invoiceCardsContainer}>
+            <div className={styles.invoiceCardsContainer}>
               {invoices.length === 0 ? (
                 <div className={styles.noInvoicesMessage}>
                   <p>No invoices loaded. Ask the AI to "show invoices" or "list invoices".</p>
@@ -741,7 +772,17 @@ export default function HomePage() {
 
         {/* Right Panel: AI Chat */}
         <section className={styles.rightPanel}>
-          <h2 className={styles.panelTitle}>AI Chat</h2>
+          <div className={styles.chatHeader}>
+            <h2 className={styles.panelTitle}>AI Chat</h2>
+            {/* AI Agent Avatar */}
+            <div className={styles.aiAvatar}>
+              <div className={styles.avatarCircle}>
+                <svg className={styles.avatarIcon} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z" fill="#00FFB2"/>
+                </svg>
+              </div>
+            </div>
+          </div>
           <div className={styles.chatContainer} ref={chatContainerRef}>
             {chatMessages.map((msg, idx) => (
               <div
@@ -778,7 +819,98 @@ export default function HomePage() {
               Send
             </button>
           </form>
+          {/* Date + Time Stamp */}
+          <div className={styles.timestampContainer}>
+            <span className={styles.timestamp}>
+              Last sync: {new Date().toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+              })} · {new Date().toLocaleTimeString('en-US', { 
+                hour: 'numeric', 
+                minute: '2-digit',
+                hour12: true 
+              })}
+            </span>
+          </div>
         </section>
+      </div>
+      
+      {/* All Invoices Modal */}
+      {showAllInvoicesModal && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modalContent}>
+            <div className={styles.modalHeader}>
+              <h2 className={styles.modalTitle}>All Invoices ({invoices.length})</h2>
+              <button 
+                className={styles.modalCloseButton}
+                onClick={() => setShowAllInvoicesModal(false)}
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className={styles.modalBody}>
+              <div className={styles.invoiceGrid}>
+                {invoices.map((invoice, index) => (
+                  <div
+                    key={invoice.Id}
+                    className={`${styles.modalInvoiceCard} ${invoice.Id === selectedInvoiceId ? styles.modalInvoiceCardActive : ''}`}
+                    onClick={() => handleModalInvoiceSelect(invoice, index)}
+                  >
+                    <div className={styles.modalInvoiceHeader}>
+                      <h4 className={styles.modalInvoiceNumber}>#{invoice.DocNumber || invoice.Id}</h4>
+                      <span className={styles.modalInvoiceAmount}>
+                        ${invoice.TotalAmt ? Number(invoice.TotalAmt).toFixed(2) : '0.00'}
+                      </span>
+                    </div>
+                    <div className={styles.modalInvoiceInfo}>
+                      <p className={styles.modalInvoiceCustomer}>
+                        {invoice.CustomerRef?.name || 'Unknown Customer'}
+                      </p>
+                      <p className={styles.modalInvoiceDate}>
+                        {invoice.TxnDate ? new Date(invoice.TxnDate).toLocaleDateString() : 'No date'}
+                      </p>
+                    </div>
+                    <div className={styles.modalInvoiceStatus}>
+                      <span className={`${styles.statusBadge} ${(invoice.Balance && Number(invoice.Balance) > 0) ? styles.statusPending : styles.statusPaid}`}>
+                        {(invoice.Balance && Number(invoice.Balance) > 0) ? 'Pending' : 'Paid'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* Navigation Controls */}
+            {invoices.length > 0 && (
+              <div className={styles.modalNavigation}>
+                <button 
+                  className={`${styles.modalNavButton} ${modalCurrentIndex === 0 ? styles.modalNavButtonDisabled : ''}`}
+                  onClick={() => handleModalNavigation('prev')}
+                  disabled={modalCurrentIndex === 0}
+                >
+                  ← Previous
+                </button>
+                <span className={styles.modalNavInfo}>
+                  {modalCurrentIndex + 1} of {invoices.length}
+                </span>
+                <button 
+                  className={`${styles.modalNavButton} ${modalCurrentIndex === invoices.length - 1 ? styles.modalNavButtonDisabled : ''}`}
+                  onClick={() => handleModalNavigation('next')}
+                  disabled={modalCurrentIndex === invoices.length - 1}
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Footer Tagline */}
+      <div className={styles.footerTagline}>
+        <span>AI Invoice Assistant by Core Edge Solutions — Powered by GPT</span>
       </div>
     </main>
   );
