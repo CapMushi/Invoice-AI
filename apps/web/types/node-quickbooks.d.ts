@@ -23,6 +23,8 @@ declare module 'node-quickbooks' {
     deleteInvoice(idOrEntity: string | any, callback: Callback<any>): void;
     sendInvoicePdf(id: string, sendTo: string, callback: Callback<any>): void;
     
+
+    
     // Company info
     getCompanyInfo(id: string, callback: Callback<any>): void;
     

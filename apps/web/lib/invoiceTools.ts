@@ -114,16 +114,72 @@ export const invoiceTools = {
   }),
 
   createInvoice: tool({
-    description: 'Create a new invoice',
+    description: 'Create a new invoice immediately when customer name and amount are provided. ONLY works with existing customers - will return an error if customer is not found. ALWAYS extract and use this tool when user mentions creating an invoice with customer name and amount. Do NOT ask for additional details.',
     parameters: z.object({
-      invoice: z.any().describe('Invoice object as per QuickBooks API'),
+      customer_name: z.string().describe('Customer name extracted from phrases like "create invoice for John" or "customer name John"'),
+      amount: z.number().describe('Invoice amount extracted from phrases like "$200", "200 dollars", "amount of 200"'),
+      due_date: z.string().optional().describe('Due date if mentioned (format: YYYY-MM-DD)'),
+      invoice_no: z.string().optional().describe('Invoice number if mentioned'),
+      customer_email: z.string().email().optional().describe('Customer email if mentioned'),
     }),
-    execute: async ({ invoice }) => {
+    execute: async ({ customer_name, amount, due_date, invoice_no, customer_email }) => {
       try {
-        console.log('Creating new invoice using SDK...');
+        console.log(`Creating new invoice for ${customer_name} with amount $${amount}...`);
         const qbo = await getQuickBooksClient();
         
-        const newInvoice = await qbo.createInvoice(invoice);
+        // Find the customer by searching for existing invoices from this customer
+        let customer = null;
+        try {
+          // Search for invoices to find customer information
+          const invoices = await qbo.findInvoices({ limit: 1000 });
+          if (invoices && (invoices as any).QueryResponse?.Invoice) {
+            const allInvoices = (invoices as any).QueryResponse.Invoice;
+            // Find an invoice from this customer (case-insensitive partial match)
+            const customerInvoice = allInvoices.find((inv: any) => 
+              inv.CustomerRef?.name?.toLowerCase().includes(customer_name.toLowerCase()) ||
+              customer_name.toLowerCase().includes(inv.CustomerRef?.name?.toLowerCase())
+            );
+            
+            if (customerInvoice && customerInvoice.CustomerRef) {
+              customer = {
+                Id: customerInvoice.CustomerRef.value,
+                Name: customerInvoice.CustomerRef.name
+              };
+              console.log(`Found customer from existing invoices: ${customer.Name} (ID: ${customer.Id})`);
+            }
+          }
+        } catch (error) {
+          console.log(`Customer lookup through invoices failed: ${error}`);
+        }
+        
+        // If customer not found, return an error
+        if (!customer || !customer.Id) {
+          throw new Error(`Customer "${customer_name}" not found. Please use an existing customer name or create the customer in QuickBooks first.`);
+        }
+        
+        // Create invoice object
+        const invoiceData = {
+          CustomerRef: {
+            value: customer.Id,
+            name: customer.Name
+          },
+          ...(due_date && { DueDate: due_date }),
+          ...(invoice_no && { DocNumber: invoice_no }),
+          Line: [
+            {
+              Amount: amount,
+              DetailType: "SalesItemLineDetail",
+              SalesItemLineDetail: {
+                ItemRef: {
+                  value: "1", // Default item - you may need to adjust based on your QuickBooks setup
+                  name: "Services"
+                }
+              }
+            }
+          ]
+        };
+        
+        const newInvoice = await qbo.createInvoice(invoiceData);
         console.log(`Successfully created invoice with ID: ${(newInvoice as any)?.Id}`);
         
         return newInvoice;
