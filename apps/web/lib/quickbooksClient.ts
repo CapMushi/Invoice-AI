@@ -17,14 +17,32 @@ function promisify<T>(fn: Function, context: any): (...args: any[]) => Promise<T
 }
 
 export async function getQuickBooksClient() {
+  console.log('🔍 QuickBooks Client: Starting authentication check...');
+  
   const tokens = await getQuickBooksTokens();
+  console.log('🔍 QuickBooks Client: Tokens retrieved:', {
+    hasTokens: !!tokens,
+    hasAccessToken: !!tokens?.access_token,
+    hasRealmId: !!tokens?.realmId,
+    hasRefreshToken: !!tokens?.refresh_token,
+    realmId: tokens?.realmId
+  });
   
   if (!tokens || !tokens.access_token || !tokens.realmId) {
+    console.error('❌ QuickBooks Client: Authentication failed - missing tokens');
     throw new Error('QuickBooks not authenticated');
   }
 
   const environment = process.env.QUICKBOOKS_ENVIRONMENT || 'sandbox';
   const useSandbox = environment === 'sandbox';
+  
+  console.log('🔍 QuickBooks Client: Environment config:', {
+    environment,
+    useSandbox,
+    hasClientId: !!process.env.QUICKBOOKS_CLIENT_ID,
+    hasClientSecret: !!process.env.QUICKBOOKS_CLIENT_SECRET,
+    nodeEnv: process.env.NODE_ENV
+  });
 
   // Initialize QuickBooks SDK client
   const qbo = new QuickBooks(
@@ -39,6 +57,8 @@ export async function getQuickBooksClient() {
     '2.0', // OAuth version
     tokens.refresh_token
   );
+  
+  console.log('🔍 QuickBooks Client: SDK client initialized successfully');
 
   // Create promisified versions of the methods we need
   return {

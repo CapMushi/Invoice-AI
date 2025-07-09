@@ -4,28 +4,75 @@ import { getQuickBooksClient, handleSDKError } from './quickbooksClient';
 
 export const invoiceTools = {
   getInvoice: tool({
-    description: 'Get details of a specific invoice by ID',
+    description: 'Get details of a specific invoice by ID or Number. Use when user requests to view, show, display, or get a specific invoice with an ID number or document number.',
     parameters: z.object({
-      invoiceId: z.string().describe('The ID of the invoice to retrieve'),
+      invoiceId: z.string().describe('The ID or Number of the invoice to retrieve'),
     }),
     execute: async ({ invoiceId }) => {
       try {
-        console.log(`Retrieving invoice ${invoiceId} using SDK...`);
+        console.log(`🔍 getInvoice: Retrieving invoice ${invoiceId} using SDK...`);
         const qbo = await getQuickBooksClient();
         
-        const invoice = await qbo.getInvoice(invoiceId);
+        let invoice = null;
         
-        // Verify the returned invoice has the exact ID we requested (not partial match)
+        // First, try to get invoice by direct ID
+        try {
+          console.log(`🔍 getInvoice: Trying direct ID lookup for ${invoiceId}...`);
+          invoice = await qbo.getInvoice(invoiceId);
+          console.log(`🔍 getInvoice: Direct ID lookup result:`, invoice);
+          
+          // Verify the returned invoice has the exact ID we requested
+          if (invoice && (invoice as any)?.Id) {
+            const returnedId = (invoice as any).Id;
+            if (returnedId === invoiceId || returnedId.toString() === invoiceId) {
+              console.log(`✅ getInvoice: Found invoice by direct ID lookup`);
+            } else {
+              // ID mismatch, this isn't the right invoice
+              invoice = null;
+            }
+          } else {
+            invoice = null;
+          }
+        } catch (directError: any) {
+          console.log(`🔍 getInvoice: Direct ID lookup failed, will try DocNumber search:`, directError.message);
+          invoice = null;
+        }
+        
+        // If direct ID lookup failed, search by DocNumber
+        if (!invoice) {
+          console.log(`🔍 getInvoice: Searching by DocNumber for ${invoiceId}...`);
+          try {
+            const invoices = await qbo.findInvoices({ limit: 1000 });
+            console.log(`🔍 getInvoice: Search response:`, invoices);
+            
+            if (invoices && (invoices as any).QueryResponse?.Invoice) {
+              const allInvoices = (invoices as any).QueryResponse.Invoice;
+              console.log(`🔍 getInvoice: Searching through ${allInvoices.length} invoices for DocNumber ${invoiceId}...`);
+              
+              // Find invoice by DocNumber
+              const foundInvoice = allInvoices.find((inv: any) => {
+                const docNumber = inv.DocNumber;
+                console.log(`🔍 getInvoice: Checking invoice ID ${inv.Id}, DocNumber: ${docNumber}`);
+                return docNumber === invoiceId || docNumber?.toString() === invoiceId;
+              });
+              
+              if (foundInvoice) {
+                console.log(`✅ getInvoice: Found invoice by DocNumber search - ID: ${foundInvoice.Id}, DocNumber: ${foundInvoice.DocNumber}`);
+                invoice = foundInvoice;
+              }
+            }
+          } catch (searchError) {
+            console.error(`❌ getInvoice: DocNumber search failed:`, searchError);
+          }
+        }
+        
+        // Final check - do we have an invoice?
         if (!invoice || !(invoice as any)?.Id) {
-          throw new Error(`Invoice with ID ${invoiceId} does not exist`);
+          console.log(`❌ getInvoice: Invoice with ID/Number ${invoiceId} does not exist (no invoice found)`);
+          throw new Error(`Invoice with ID/Number ${invoiceId} does not exist`);
         }
         
-        const returnedId = (invoice as any).Id;
-        if (returnedId !== invoiceId && returnedId.toString() !== invoiceId) {
-          throw new Error(`Invoice with ID ${invoiceId} does not exist`);
-        }
-        
-        console.log(`Successfully retrieved invoice ${invoiceId}`);
+        console.log(`✅ getInvoice: Successfully retrieved invoice ${invoiceId}`);
         
         // Generate natural language summary for the invoice
         const generateInvoiceSummary = (invoice: any) => {
@@ -59,40 +106,48 @@ export const invoiceTools = {
         };
         
         const naturalLanguageSummary = generateInvoiceSummary(invoice);
+        console.log(`🔍 getInvoice: Generated summary:`, naturalLanguageSummary);
         
         // Return both the structured data and natural language summary
-        return {
+        const result = {
           ...invoice,
           summary: naturalLanguageSummary
         };
+        console.log(`🔍 getInvoice: Final result structure:`, Object.keys(result));
+        return result;
       } catch (error: any) {
-        console.error(`Failed to retrieve invoice ${invoiceId}:`, error);
+        console.error(`❌ getInvoice: Failed to retrieve invoice ${invoiceId}:`, error);
         return handleSDKError(error);
       }
     },
   }),
 
   listInvoices: tool({
-    description: 'List ALL invoices with optional filters. Always returns ALL invoices unless specifically limited. Use "unpaid" to filter unpaid invoices, "paid" for paid invoices, or specify a customer name. Do not limit results unless explicitly requested.',
+    description: 'List multiple invoices with optional filtering. Use when user requests to show, list, get, or display multiple invoices (not a specific invoice ID). Can filter by paid/unpaid status or customer name.',
     parameters: z.object({
-      start: z.number().optional().describe('Start position for pagination'),
-      maxResults: z.number().optional().describe('Maximum number of invoices to return - leave empty to get ALL invoices'),
       filter: z.string().optional().describe('Filter type: "unpaid", "paid", or customer name'),
     }),
-    execute: async ({ start, maxResults, filter }) => {
+    execute: async ({ filter }) => {
       try {
-        // console.log('🔍 TOOL CALLED - listInvoices with params:', { start, maxResults, filter });
-        const qbo = await getQuickBooksClient();
+        console.log('🔍 listInvoices: TOOL CALLED with params:', { filter });
         
-        // Build criteria object for SDK
-        const criteria: any = {};
+        // Add detailed debugging
+        console.log('🔍 listInvoices: Starting QuickBooks client connection...');
+        const qbo = await getQuickBooksClient();
+        console.log('🔍 listInvoices: QuickBooks client connected successfully');
+        
+        // Build criteria object for SDK - always get ALL invoices
+        const criteria: any = {
+          limit: 1000  // Set high limit to get all invoices
+        };
         
         // For now, let's fetch all invoices and filter client-side to avoid QB API issues
         let clientSideFilter = null;
-        let filterDescription = 'all invoices';
+        let filterDescription = 'invoices'; // Changed from 'all invoices' to 'invoices' for better grammar
         
         if (filter) {
           const filterLower = filter.toLowerCase();
+          console.log('🔍 listInvoices: Processing filter:', filterLower);
           if (filterLower.includes('unpaid') || filterLower.includes('open') || filterLower.includes('outstanding')) {
             clientSideFilter = 'unpaid';
             filterDescription = 'unpaid invoices';
@@ -108,28 +163,33 @@ export const invoiceTools = {
           }
         }
         
-        if (maxResults) {
-          criteria.limit = maxResults;
-        } else {
-          // Set a very high limit to ensure we get ALL invoices when no limit is specified
-          criteria.limit = 1000;
-        }
-        
-        if (start) {
-          criteria.offset = start;
-        }
+        console.log('🔍 listInvoices: Criteria for QuickBooks API:', criteria);
+        console.log('🔍 listInvoices: Making API call to QuickBooks...');
         
         const invoices = await qbo.findInvoices(criteria);
+        
+        console.log('🔍 listInvoices: Raw response from QuickBooks:', invoices);
+        console.log('🔍 listInvoices: Response type:', typeof invoices);
+        console.log('🔍 listInvoices: Response keys:', invoices ? Object.keys(invoices) : 'null');
+        
+        if (invoices && (invoices as any).QueryResponse) {
+          console.log('🔍 listInvoices: QueryResponse keys:', Object.keys((invoices as any).QueryResponse));
+          console.log('🔍 listInvoices: QueryResponse.Invoice type:', typeof (invoices as any).QueryResponse.Invoice);
+          console.log('🔍 listInvoices: QueryResponse.Invoice length:', (invoices as any).QueryResponse.Invoice?.length);
+        }
+        
         const initialCount = (invoices as any)?.QueryResponse?.Invoice?.length || 0;
-        console.log(`Successfully retrieved ${initialCount} invoices from QuickBooks`);
+        console.log(`🔍 listInvoices: Successfully retrieved ${initialCount} invoices from QuickBooks`);
         
         // Apply client-side filtering if needed
         let filteredInvoices = [];
         if (invoices && (invoices as any).QueryResponse?.Invoice) {
           const allInvoices = (invoices as any).QueryResponse.Invoice;
+          console.log(`🔍 listInvoices: Processing ${allInvoices.length} invoices for filtering`);
           filteredInvoices = allInvoices;
           
           if (clientSideFilter) {
+            console.log(`🔍 listInvoices: Applying client-side filter: ${clientSideFilter}`);
             if (clientSideFilter === 'unpaid') {
               filteredInvoices = allInvoices.filter((inv: any) => 
                 inv.Balance && parseFloat(inv.Balance) > 0
@@ -153,7 +213,9 @@ export const invoiceTools = {
             }
           }
           
-          console.log(`Filtered to ${filteredInvoices.length} invoices based on filter: ${clientSideFilter}`);
+          console.log(`🔍 listInvoices: Filtered to ${filteredInvoices.length} invoices based on filter: ${clientSideFilter}`);
+        } else {
+          console.log('🔍 listInvoices: No invoices found in response or invalid response structure');
         }
         
         // Generate natural language summary
@@ -208,9 +270,10 @@ export const invoiceTools = {
         };
         
         const naturalLanguageSummary = generateSummary(filteredInvoices, filterDescription);
+        console.log(`🔍 listInvoices: Generated summary:`, naturalLanguageSummary);
         
         // Return both the structured data and natural language summary
-        return {
+        const result = {
           QueryResponse: {
             Invoice: filteredInvoices
           },
@@ -218,15 +281,22 @@ export const invoiceTools = {
           count: filteredInvoices.length,
           filterApplied: filterDescription
         };
+        console.log(`🔍 listInvoices: Final result structure:`, {
+          invoiceCount: result.QueryResponse.Invoice.length,
+          summary: result.summary.substring(0, 100) + '...',
+          count: result.count,
+          filterApplied: result.filterApplied
+        });
+        return result;
       } catch (error: any) {
-        console.error('Failed to list invoices:', error);
+        console.error('❌ listInvoices: Failed to list invoices:', error);
         return handleSDKError(error);
       }
     },
   }),
 
   createInvoice: tool({
-    description: 'Create a new invoice immediately when customer name and amount are provided. ONLY works with existing customers - will return an error if customer is not found. ALWAYS extract and use this tool when user mentions creating an invoice with customer name and amount. Do NOT ask for additional details.',
+    description: 'Create a new invoice. Use ONLY when user explicitly requests to create, make, add, or insert a new invoice with customer name and amount. Requires existing customer.',
     parameters: z.object({
       customer_name: z.string().describe('Customer name extracted from phrases like "create invoice for John" or "customer name John"'),
       amount: z.number().describe('Invoice amount extracted from phrases like "$200", "200 dollars", "amount of 200"'),
@@ -303,9 +373,9 @@ export const invoiceTools = {
   }),
 
   updateInvoice: tool({
-    description: 'Update an existing invoice with extracted parameters. ALWAYS extract and use this tool when user mentions updating an invoice with specific changes.',
+    description: 'Update an existing invoice by ID or Number. Use ONLY when user explicitly requests to update, change, modify, or edit an existing invoice with specific changes.',
     parameters: z.object({
-      invoiceId: z.string().describe('The ID of the invoice to update'),
+      invoiceId: z.string().describe('The ID or Number of the invoice to update'),
       amount: z.number().optional().describe('Update the invoice total amount'),
       customer_name: z.string().optional().describe('Change the customer (must be existing customer)'),
       due_date: z.string().optional().describe('Update the due date (format: YYYY-MM-DD)'),
@@ -331,12 +401,14 @@ export const invoiceTools = {
           const allInvoices = (allInvoicesResult as any).QueryResponse.Invoice;
           console.log(`Searching through ${allInvoices.length} invoices for exact ID match`);
           
-          // Find exact ID match
+          // Find exact ID match or DocNumber match
           exactInvoice = allInvoices.find((inv: any) => {
             const invoiceId_str = inv.Id ? inv.Id.toString() : '';
+            const docNumber_str = inv.DocNumber ? inv.DocNumber.toString() : '';
             const requested_str = invoiceId.toString();
-            console.log(`Comparing: "${invoiceId_str}" === "${requested_str}" ? ${invoiceId_str === requested_str}`);
-            return invoiceId_str === requested_str;
+            console.log(`Comparing ID: "${invoiceId_str}" === "${requested_str}" ? ${invoiceId_str === requested_str}`);
+            console.log(`Comparing DocNumber: "${docNumber_str}" === "${requested_str}" ? ${docNumber_str === requested_str}`);
+            return invoiceId_str === requested_str || docNumber_str === requested_str;
           });
           
           foundExactMatch = !!exactInvoice;
@@ -484,25 +556,46 @@ export const invoiceTools = {
   }),
 
   deleteInvoice: tool({
-    description: 'Delete an invoice by ID',
+    description: 'Delete an invoice by ID or Number. Use ONLY when user explicitly requests to delete, remove, or cancel an invoice with a specific ID/Number. NOT for emailing or other actions.',
     parameters: z.object({
-      invoiceId: z.string().describe('The ID of the invoice to delete'),
+      invoiceId: z.string().describe('The ID or Number of the invoice to delete'),
     }),
     execute: async ({ invoiceId }) => {
       try {
         console.log(`Deleting invoice ${invoiceId} using SDK...`);
         const qbo = await getQuickBooksClient();
         
-        // First verify the invoice exists with exact ID match
-        const existingInvoice = await qbo.getInvoice(invoiceId);
-        if (!existingInvoice || !(existingInvoice as any)?.Id) {
-          throw new Error(`Invoice with ID ${invoiceId} does not exist`);
+        // First try to get invoice by direct ID
+        let existingInvoice = null;
+        try {
+          existingInvoice = await qbo.getInvoice(invoiceId);
+          if (existingInvoice && (existingInvoice as any)?.Id) {
+            const returnedId = (existingInvoice as any).Id;
+            if (returnedId !== invoiceId && returnedId.toString() !== invoiceId) {
+              existingInvoice = null; // ID mismatch
+            }
+          } else {
+            existingInvoice = null;
+          }
+        } catch (directError: any) {
+          existingInvoice = null;
         }
         
-        // Verify the returned invoice has the exact ID we requested (not partial match)
-        const returnedId = (existingInvoice as any).Id;
-        if (returnedId !== invoiceId && returnedId.toString() !== invoiceId) {
-          throw new Error(`Invoice with ID ${invoiceId} does not exist`);
+        // If direct ID lookup failed, search by DocNumber
+        if (!existingInvoice) {
+          const invoices = await qbo.findInvoices({ limit: 1000 });
+          if (invoices && (invoices as any).QueryResponse?.Invoice) {
+            const allInvoices = (invoices as any).QueryResponse.Invoice;
+            const foundInvoice = allInvoices.find((inv: any) => {
+              const docNumber = inv.DocNumber;
+              return docNumber === invoiceId || docNumber?.toString() === invoiceId;
+            });
+            existingInvoice = foundInvoice;
+          }
+        }
+        
+        if (!existingInvoice || !(existingInvoice as any)?.Id) {
+          throw new Error(`Invoice with ID/Number ${invoiceId} does not exist`);
         }
         
         // SDK handles the get-and-delete process automatically
@@ -518,40 +611,128 @@ export const invoiceTools = {
   }),
 
   emailInvoicePdf: tool({
-    description: 'Email an invoice PDF to a recipient',
+    description: 'Email an invoice PDF to a recipient. Use ONLY when user explicitly requests to email, send, or mail an invoice to a specific email address. NOT for deleting or other actions.',
     parameters: z.object({
-      invoiceId: z.string().describe('The ID of the invoice to email'),
+      invoiceId: z.string().describe('The ID or Number of the invoice to email'),
       email: z.string().email().describe('Recipient email address'),
     }),
     execute: async ({ invoiceId, email }) => {
       try {
-        console.log(`Emailing invoice ${invoiceId} PDF to ${email} using SDK...`);
+        console.log(`🔍 emailInvoicePdf: Starting email process for invoice ${invoiceId} to ${email}`);
         const qbo = await getQuickBooksClient();
         
-        // First verify the invoice exists
-        console.log(`Verifying invoice ${invoiceId} exists...`);
-        const invoice = await qbo.getInvoice(invoiceId);
+        // First try to get invoice by direct ID
+        console.log(`🔍 emailInvoicePdf: Verifying invoice ${invoiceId} exists...`);
+        let invoice = null;
+        try {
+          invoice = await qbo.getInvoice(invoiceId);
+          if (invoice && (invoice as any)?.Id) {
+            const returnedId = (invoice as any).Id;
+            if (returnedId !== invoiceId && returnedId.toString() !== invoiceId) {
+              invoice = null; // ID mismatch
+            }
+          } else {
+            invoice = null;
+          }
+        } catch (directError: any) {
+          invoice = null;
+        }
+        
+        // If direct ID lookup failed, search by DocNumber
+        if (!invoice) {
+          console.log(`🔍 emailInvoicePdf: Searching by DocNumber for ${invoiceId}...`);
+          const invoices = await qbo.findInvoices({ limit: 1000 });
+          if (invoices && (invoices as any).QueryResponse?.Invoice) {
+            const allInvoices = (invoices as any).QueryResponse.Invoice;
+            const foundInvoice = allInvoices.find((inv: any) => {
+              const docNumber = inv.DocNumber;
+              return docNumber === invoiceId || docNumber?.toString() === invoiceId;
+            });
+            invoice = foundInvoice;
+          }
+        }
         
         if (!invoice || !(invoice as any)?.Id) {
-          throw new Error(`Invoice with ID ${invoiceId} does not exist`);
+          console.log(`❌ emailInvoicePdf: Invoice ${invoiceId} not found`);
+          throw new Error(`Invoice with ID/Number ${invoiceId} does not exist`);
         }
         
-        // Verify the returned invoice has the exact ID we requested (not partial match)
-        const returnedId = (invoice as any).Id;
-        if (returnedId !== invoiceId && returnedId.toString() !== invoiceId) {
-          throw new Error(`Invoice with ID ${invoiceId} does not exist`);
+        const invoiceNumber = (invoice as any).DocNumber || invoiceId;
+        const customerName = (invoice as any).CustomerRef?.name || 'Unknown Customer';
+        console.log(`✅ emailInvoicePdf: Invoice found - #${invoiceNumber} for ${customerName}`);
+        
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          throw new Error(`Invalid email format: ${email}`);
         }
         
-        console.log(`Invoice found: ${(invoice as any).DocNumber}, Customer: ${(invoice as any).CustomerRef?.name}`);
+        console.log(`🔍 emailInvoicePdf: Attempting to send invoice PDF via QuickBooks API...`);
         
-        // Send the invoice PDF using SDK
-        const result = await qbo.sendInvoicePdf(invoiceId, email);
-        console.log(`Successfully sent invoice ${invoiceId} PDF to ${email}`);
+        // Try to send the invoice PDF
+        let result;
+        try {
+          result = await qbo.sendInvoicePdf(invoiceId, email);
+          console.log(`🔍 emailInvoicePdf: Raw result from sendInvoicePdf:`, result);
+        } catch (apiError: any) {
+          console.error(`❌ emailInvoicePdf: QuickBooks API error:`, apiError);
+          
+          // Check if it's a method not found error
+          if (apiError.message && apiError.message.includes('sendInvoicePdf')) {
+            console.log(`❌ emailInvoicePdf: sendInvoicePdf method not available in QuickBooks SDK`);
+            throw new Error(`Email functionality is not available in the current QuickBooks integration. The sendInvoicePdf method is not supported by the QuickBooks SDK.`);
+          }
+          
+          // Check for authentication errors
+          if (apiError.message && (apiError.message.includes('Unauthorized') || apiError.message.includes('authentication'))) {
+            throw new Error(`QuickBooks authentication failed. Please re-authenticate with QuickBooks.`);
+          }
+          
+          // Check for permission errors
+          if (apiError.message && apiError.message.includes('permission')) {
+            throw new Error(`Insufficient permissions to send invoice emails. Please check your QuickBooks app permissions.`);
+          }
+          
+          // For other API errors, provide more context
+          throw new Error(`Failed to send invoice email: ${apiError.message || 'Unknown QuickBooks API error'}`);
+        }
         
-        return result;
+        // Verify the result indicates success
+        if (!result) {
+          console.log(`❌ emailInvoicePdf: No result returned from sendInvoicePdf`);
+          throw new Error(`Email sending failed - no response from QuickBooks API`);
+        }
+        
+        console.log(`✅ emailInvoicePdf: Invoice #${invoiceNumber} emailed to ${email} successfully`);
+        
+        // Return a success message with details
+        return {
+          success: true,
+          message: `Invoice #${invoiceNumber} emailed to ${email} successfully`,
+          invoiceId: invoiceId,
+          invoiceNumber: invoiceNumber,
+          customerName: customerName,
+          recipient: email,
+          timestamp: new Date().toISOString()
+        };
+        
       } catch (error: any) {
-        console.error(`Failed to email invoice ${invoiceId} PDF to ${email}:`, error);
-        return handleSDKError(error);
+        console.error(`❌ emailInvoicePdf: Failed to email invoice ${invoiceId} to ${email}:`, error);
+        
+        // Return specific error messages for better user experience
+        if (error.message.includes('does not exist')) {
+          return { error: `Invoice #${invoiceId} was not found. It may have been deleted or is inactive.` };
+        }
+        
+        if (error.message.includes('Invalid email format')) {
+          return { error: `Invalid email address: ${email}. Please provide a valid email address.` };
+        }
+        
+        if (error.message.includes('not available') || error.message.includes('not supported')) {
+          return { error: `Email functionality is currently not available. Please manually send the invoice from QuickBooks.` };
+        }
+        
+        return { error: error.message || 'Failed to send invoice email' };
       }
     },
   }),

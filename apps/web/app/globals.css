@@ -4,6 +4,7 @@ html {
   padding: 0;
   height: 100%;
   overflow: hidden;
+  background: radial-gradient(circle at top left, #0d1b12 0%, #0a0f0d 100%);
 }
 
 body {
@@ -11,5 +12,6 @@ body {
   padding: 0;
   height: 100%;
   overflow: hidden;
-  background: #ffffff;
+  background: radial-gradient(circle at top left, #0d1b12 0%, #0a0f0d 100%);
+  color: #F1F1F1;
 }

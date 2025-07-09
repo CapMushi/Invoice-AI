@@ -226,11 +226,17 @@ export default function HomePage() {
         let responseText = result?.text || "";
         let invoiceDataFound = false;
         
+        // Handle multi-step workflow display
+        let workflowText = "";
+        if (result?.isMultiStep && result?.workflowSteps && result.workflowSteps.length > 0) {
+          workflowText = `\n\n**Workflow Progress:**\n${result.workflowSteps.map((step: string, index: number) => `${index + 1}. ${step}`).join('\n')}\n\n`;
+        }
+        
         // Debug logging to understand the response structure
-        // console.log('🔍 API Response:', data);
-        // console.log('🔍 Result:', result);
-        // console.log('🔍 Tool Calls:', result?.toolCalls);
-        // console.log('🔍 Tool Results:', result?.toolResults);
+        console.log('🔍 API Response:', data);
+        console.log('🔍 Result:', result);
+        console.log('🔍 Tool Calls:', result?.toolCalls);
+        console.log('🔍 Tool Results:', result?.toolResults);
         
 
         
@@ -377,171 +383,146 @@ export default function HomePage() {
 
         // Check for tool calls that returned results
         if (result?.toolCalls) {
-          // First check if any tool calls have errors to prevent infinite loops
-          const hasErrors = result.toolResults?.some((tr: any) => tr.result?.error);
+          console.log('🔍 Processing tool calls:', result.toolCalls.length);
           
-          if (hasErrors) {
-            const errorResult = result.toolResults?.find((tr: any) => tr.result?.error);
-            invoiceDataFound = true;
-            responseText = `Error: ${errorResult?.result?.error || 'Unknown error occurred'}`;
-          } else {
-            for (const toolCall of result.toolCalls) {
-              const toolResult = result.toolResults?.find((tr: any) => tr.toolCallId === toolCall.toolCallId);
+          // Handle multi-step workflow display
+          let stepResults: string[] = [];
+          let hasAnyToolCalls = true; // Track that we processed tool calls
+          
+          for (const toolCall of result.toolCalls) {
+            const toolResult = result.toolResults?.find((tr: any) => tr.toolCallId === toolCall.toolCallId);
+            console.log(`🔍 Processing tool call: ${toolCall.toolName}`, toolResult);
             
-            if (toolCall.toolName === 'listInvoices' || toolCall.toolName === 'getInvoice') {
-              if (toolResult?.result) {
-                // Check if there's an error in the tool result
-                if (toolResult.result.error) {
-                  invoiceDataFound = true;
-                  responseText = `Error retrieving invoices: ${toolResult.result.error}`;
+            // Process each tool call and accumulate results
+            let stepMessage = "";
+            let stepSuccess = false;
+            const hasError = toolResult?.result && typeof toolResult.result === 'object' && 'error' in toolResult.result;
+            
+            if (hasError) {
+              console.log(`❌ Tool call ${toolCall.toolName} failed:`, (toolResult.result as any).error);
+              const errorMessage = (toolResult.result as any).error;
+              
+              // Handle specific error cases with user-friendly messages
+              if (errorMessage.includes('Object Not Found') || errorMessage.includes('inactive')) {
+                if (toolCall.toolName === 'getInvoice') {
+                  stepMessage = `Invoice #${toolCall.args?.invoiceId} was not found. It may have been deleted or is inactive.`;
+                } else if (toolCall.toolName === 'updateInvoice') {
+                  stepMessage = `Cannot update invoice #${toolCall.args?.invoiceId} - it was not found or is inactive.`;
+                } else if (toolCall.toolName === 'deleteInvoice') {
+                  stepMessage = `Cannot delete invoice #${toolCall.args?.invoiceId} - it was not found or is inactive.`;
                 } else {
-                  // For listInvoices, directly access the expected structure
-                  let extractedInvoices = null;
-                  
-                  if (toolCall.toolName === 'listInvoices') {
-                    // listInvoices returns: { QueryResponse: { Invoice: [...] }, summary: "...", count: N, filterApplied: "..." }
-                    // console.log('🔍 listInvoices toolResult.result:', toolResult.result);
-                    // console.log('🔍 QueryResponse:', toolResult.result.QueryResponse);
-                    // console.log('🔍 Invoice array:', toolResult.result.QueryResponse?.Invoice);
-                    extractedInvoices = toolResult.result.QueryResponse?.Invoice || [];
-                  } else if (toolCall.toolName === 'getInvoice') {
-                    // getInvoice returns the invoice object directly with summary
-                    // Try to extract from the result structure
-                    extractedInvoices = extractInvoiceData(toolResult.result);
-                  }
-                  
-                  // console.log('🔍 Extracted invoices:', extractedInvoices);
-                  
-                  if (extractedInvoices && extractedInvoices.length > 0) {
-                    invoiceDataFound = true;
-                    
-                    if (toolCall.toolName === 'listInvoices') {
-                      // Handle list invoices response - always set invoices in cards
-                      // console.log('🔍 Setting invoices in state:', extractedInvoices);
-                      setInvoices(extractedInvoices);
-                      
-                      // Use the natural language summary from the tool result if available
-                      if (toolResult.result.summary) {
-                        responseText = toolResult.result.summary;
-                      } else {
-                        // Fallback to generic response
-                        const filterApplied = toolResult.result.filterApplied || 'invoices';
-                        responseText = `Found ${extractedInvoices.length} ${filterApplied}. Check the invoices panel to view them.`;
-                      }
-                    } else if (toolCall.toolName === 'getInvoice') {
-                      // Handle single invoice response
-                      const invoice = extractedInvoices[0];
-                      if (invoice && invoice.Id) {
-                        setSelectedInvoiceId(invoice.Id);
-                        setSelectedInvoice(invoice);
-                        // Add to invoices list if not already there
-                        setInvoices(prev => {
-                          const exists = prev.find(inv => inv.Id === invoice.Id);
-                          return exists ? prev : [invoice, ...prev];
-                        });
-                        
-                        // Use the natural language summary from the tool result if available
-                        if (toolResult.result.summary) {
-                          responseText = toolResult.result.summary;
-                        } else {
-                          responseText = `Invoice #${invoice.DocNumber || invoice.Id} details loaded. Check the invoices panel to view details.`;
-                        }
-                      }
-                    }
-                  } else {
-                    // Check if we have a summary for zero results (important for "no invoices found" cases)
-                    if (toolCall.toolName === 'listInvoices' && toolResult.result.summary) {
-                      invoiceDataFound = true;
-                      responseText = toolResult.result.summary;
-                      // Even if no invoices found, clear the existing invoices array
-                      setInvoices([]);
-                    } else {
-                      responseText = toolCall.toolName === 'listInvoices' 
-                        ? "No invoices found matching your criteria." 
-                        : "Invoice not found.";
-                      // Clear invoices if no results for listInvoices
-                      if (toolCall.toolName === 'listInvoices') {
-                        setInvoices([]);
-                      }
-                    }
-                  }
+                  stepMessage = `Invoice operation failed: ${errorMessage}`;
                 }
               } else {
-                invoiceDataFound = true;
-                responseText = `Error: Unable to retrieve invoice data. Please try again.`;
+                stepMessage = `Error in ${toolCall.toolName}: ${errorMessage}`;
               }
-            } else if (toolCall.toolName === 'deleteInvoice') {
-              invoiceDataFound = true;
-              if (toolResult?.result && !toolResult.result.error) {
+              stepSuccess = false;
+            } else {
+              stepSuccess = true;
+              
+              // Handle each tool type
+              if (toolCall.toolName === 'listInvoices') {
+                const extractedInvoices = toolResult.result.QueryResponse?.Invoice || [];
+                console.log(`🔍 listInvoices found ${extractedInvoices.length} invoices`);
+                if (extractedInvoices.length > 0) {
+                  setInvoices(extractedInvoices);
+                  stepMessage = toolResult.result.summary || `Found ${extractedInvoices.length} invoices`;
+                } else {
+                  setInvoices([]);
+                  stepMessage = toolResult.result.summary || "No invoices found";
+                }
+              } else if (toolCall.toolName === 'getInvoice') {
+                const extractedInvoices = extractInvoiceData(toolResult.result);
+                console.log(`🔍 getInvoice extracted:`, extractedInvoices);
+                if (extractedInvoices && extractedInvoices.length > 0) {
+                  const invoice = extractedInvoices[0];
+                  setSelectedInvoiceId(invoice.Id);
+                  setSelectedInvoice(invoice);
+                  setInvoices(prev => {
+                    const exists = prev.find(inv => inv.Id === invoice.Id);
+                    return exists ? prev : [invoice, ...prev];
+                  });
+                  stepMessage = toolResult.result.summary || `Invoice #${invoice.DocNumber || invoice.Id} retrieved`;
+                } else {
+                  stepMessage = "Invoice not found";
+                  stepSuccess = false;
+                }
+              } else if (toolCall.toolName === 'createInvoice') {
+                const newInvoice = toolResult.result?.QueryResponse?.Invoice?.[0] || toolResult.result;
+                console.log(`🔍 createInvoice result:`, newInvoice);
+                if (newInvoice && newInvoice.Id) {
+                  setInvoices(prev => [newInvoice, ...prev]);
+                  setSelectedInvoiceId(newInvoice.Id);
+                  setSelectedInvoice(newInvoice);
+                  stepMessage = `Invoice #${newInvoice.DocNumber || newInvoice.Id} created successfully`;
+                } else {
+                  stepMessage = "Invoice created successfully";
+                }
+              } else if (toolCall.toolName === 'updateInvoice') {
+                const updatedInvoice = toolResult.result?.QueryResponse?.Invoice?.[0] || toolResult.result;
+                console.log(`🔍 updateInvoice result:`, updatedInvoice);
+                if (updatedInvoice && updatedInvoice.Id) {
+                  setInvoices(prev => prev.map(inv => 
+                    inv.Id === updatedInvoice.Id ? updatedInvoice : inv
+                  ));
+                  if (selectedInvoiceId === updatedInvoice.Id) {
+                    setSelectedInvoice(updatedInvoice);
+                  }
+                  stepMessage = `Invoice #${updatedInvoice.DocNumber || updatedInvoice.Id} updated successfully`;
+                } else {
+                  stepMessage = "Invoice updated successfully";
+                }
+              } else if (toolCall.toolName === 'deleteInvoice') {
                 const invoiceId = toolCall.args?.invoiceId;
-                // Remove deleted invoice from the list
+                console.log(`🔍 deleteInvoice for ID:`, invoiceId);
                 setInvoices(prev => prev.filter(inv => inv.Id !== invoiceId));
-                // Clear selection if the deleted invoice was selected
                 if (selectedInvoiceId === invoiceId) {
                   setSelectedInvoiceId('');
                   setSelectedInvoice(null);
                 }
-                responseText = `Invoice #${invoiceId} has been successfully deleted.`;
-              } else {
-                responseText = `Failed to delete invoice: ${toolResult?.result?.error || 'Unknown error'}`;
-              }
-            } else if (toolCall.toolName === 'createInvoice') {
-              invoiceDataFound = true;
-              if (toolResult?.result && !toolResult.result.error) {
-                const newInvoice = toolResult.result?.QueryResponse?.Invoice?.[0] || toolResult.result;
-                if (newInvoice && newInvoice.Id) {
-                  // Add new invoice to the list
-                  setInvoices(prev => [newInvoice, ...prev]);
-                  setSelectedInvoiceId(newInvoice.Id);
-                  setSelectedInvoice(newInvoice);
-                  responseText = `Invoice #${newInvoice.DocNumber || newInvoice.Id} has been successfully created.`;
-                } else {
-                  responseText = "Invoice created successfully.";
-                }
-              } else {
-                responseText = `Failed to create invoice: ${toolResult?.result?.error || 'Unknown error'}`;
-              }
-            } else if (toolCall.toolName === 'updateInvoice') {
-              invoiceDataFound = true;
-              if (toolResult?.result && !toolResult.result.error) {
-                const updatedInvoice = toolResult.result?.QueryResponse?.Invoice?.[0] || toolResult.result;
-                if (updatedInvoice && updatedInvoice.Id) {
-                  // Update invoice in the list
-                  setInvoices(prev => prev.map(inv => 
-                    inv.Id === updatedInvoice.Id ? updatedInvoice : inv
-                  ));
-                  // Update selected invoice if it's the one that was updated
-                  if (selectedInvoiceId === updatedInvoice.Id) {
-                    setSelectedInvoice(updatedInvoice);
-                  }
-                  responseText = `Invoice #${updatedInvoice.DocNumber || updatedInvoice.Id} has been successfully updated.`;
-                } else {
-                  responseText = "Invoice updated successfully.";
-                }
-              } else {
-                responseText = `Failed to update invoice: ${toolResult?.result?.error || 'Unknown error'}`;
-              }
-            } else if (toolCall.toolName === 'emailInvoicePdf') {
-              invoiceDataFound = true;
-              if (toolResult?.result && !toolResult.result.error) {
+                stepMessage = `Invoice #${invoiceId} deleted successfully`;
+              } else if (toolCall.toolName === 'emailInvoicePdf') {
                 const invoiceId = toolCall.args?.invoiceId;
                 const email = toolCall.args?.email;
-                responseText = `Invoice #${invoiceId} has been successfully emailed to ${email}.`;
-              } else {
-                responseText = `Failed to email invoice: ${toolResult?.result?.error || 'Unknown error'}`;
+                console.log(`🔍 emailInvoicePdf for ID ${invoiceId} to ${email}`);
+                stepMessage = `Invoice #${invoiceId} emailed to ${email} successfully`;
               }
             }
+            
+            if (stepSuccess) {
+              invoiceDataFound = true;
+            }
+            stepResults.push(stepMessage);
+          }
+          
+          // For multi-step workflows, combine all step results
+          if (result.isMultiStep && stepResults.length > 1) {
+            responseText = `Multi-step operation completed:\n\n${stepResults.map((msg, index) => `${index + 1}. ${msg}`).join('\n\n')}`;
+          } else if (stepResults.length > 0) {
+            responseText = stepResults[stepResults.length - 1]; // Use the last (most relevant) result
+          }
+          
+          // If we processed tool calls but none were successful, we still have a response
+          if (!invoiceDataFound && hasAnyToolCalls && stepResults.length > 0) {
+            responseText = stepResults[stepResults.length - 1]; // Use the error message
+            invoiceDataFound = true; // Prevent fallback to JSON.stringify
           }
         }
-      }
+
+        console.log('🔍 After processing tool calls - invoiceDataFound:', invoiceDataFound);
+        console.log('🔍 Current invoices state:', invoices.length);
+        console.log('🔍 Response text:', responseText);
 
         // If no invoice data was found in tool calls, check for direct invoice data in response
         if (!invoiceDataFound) {
+          console.log('🔍 No invoice data found in tool calls, checking fallback methods...');
           // Try to extract invoice data from the main result
           const directInvoiceData = extractInvoiceData(result);
+          console.log('🔍 Direct invoice data extracted:', directInvoiceData);
           
           if (directInvoiceData && directInvoiceData.length > 0) {
             invoiceDataFound = true;
+            console.log('🔍 Setting invoices from direct data:', directInvoiceData.length);
             
             // Check if it's a single invoice or multiple invoices
             if (directInvoiceData.length === 1) {
@@ -560,6 +541,7 @@ export default function HomePage() {
               responseText = `Found ${directInvoiceData.length} invoice(s). Check the invoices panel to view them.`;
             }
           } else {
+            console.log('🔍 No direct invoice data, checking text parsing...');
             // Check if the user's message suggests they want invoice data
             const userMessageLower = userMessage.toLowerCase();
             const invoiceKeywords = ['invoice', 'invoices', 'show', 'list', 'get', 'find', 'display'];
@@ -568,6 +550,7 @@ export default function HomePage() {
             if (containsInvoiceKeywords && result?.text) {
               // If the response text contains invoice information, try to parse it
               const parsedInvoices = parseInvoicesFromText(result.text);
+              console.log('🔍 Parsed invoices from text:', parsedInvoices);
               
               if (parsedInvoices && parsedInvoices.length > 0) {
                 invoiceDataFound = true;
@@ -580,9 +563,24 @@ export default function HomePage() {
 
         // If no invoice data was found, show the original response
         if (!invoiceDataFound) {
-          responseText = result?.text || JSON.stringify(result);
+          console.log('🔍 No invoice data found anywhere, showing original response');
+          // Use the AI's text response if available, otherwise provide a helpful message
+          if (result?.text && result.text.trim()) {
+            responseText = result.text;
+          } else if (result?.toolCalls && result.toolCalls.length > 0) {
+            // If tools were called but failed, provide a helpful message
+            responseText = "The requested operation could not be completed. Please check your request and try again.";
+          } else {
+            responseText = "I'm not sure how to help with that request. Could you please rephrase or try a different command?";
+          }
         }
 
+        // Add workflow progress for multi-step operations
+        if (workflowText && responseText) {
+          responseText = responseText + workflowText;
+        }
+
+        console.log('🔍 Final response text:', responseText);
         await streamAIResponse(responseText);
       }
     } catch (err: any) {
@@ -785,3 +783,4 @@ export default function HomePage() {
     </main>
   );
 }
+
