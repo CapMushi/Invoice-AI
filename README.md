@@ -1,3 +1,4 @@
+NOTE: DOCUMENT OF PROJECT AT ROOT
 # Turborepo starter
 
 This Turborepo starter is maintained by the Turborepo core team.
