@@ -1,0 +1,124 @@
+Upgrading Your Invoice Management Tool: Part 2
+Overview
+This document provides instructions for upgrading the existing invoice management tool you built in Part 1. We will be replacing the simple, single-user setup with a robust, multi-tenant architecture. To achieve this, we will integrate a complete authentication system using Supabase Auth and introduce a Team Collaboration feature with role-based access control (RBAC). These changes will transform the initial prototype into a secure, scalable, and collaborative application ready for real-world use.
+Enhanced Architecture: From Scaffold to Production
+The application's architecture will be upgraded to support individual user accounts and collaborative team workspaces. We will integrate Supabase as a central component to manage user data, team structures, and securely store QuickBooks API credentials, building upon your existing Vercel AI SDK and React foundation.
+Existing Scaffold: The Vercel AI SDK core, QuickBooks integration logic, and React dual-panel UI from Part 1 will be preserved and adapted.
+Supabase Integration: Supabase will be added for:
+Authentication: To manage user sign-up, login, and session handling, replacing any mock authentication.
+Database: To store user profiles, team information, member roles, and encrypted QuickBooks tokens.
+Row-Level Security (RLS): To enforce strict data access policies, ensuring users can only access data belonging to their team.
+1. Integrating Supabase Authentication and Authorization
+Adding a dedicated authentication provider is crucial for securing user data and moving beyond the single-user model.
+User Authentication Flow
+Sign-up/Login: Users can create an account using email/password or social providers (e.g., Google, GitHub) managed by Supabase Auth.
+Session Management: Supabase provides JWTs (JSON Web Tokens) to manage user sessions. These tokens will be sent with every request to the backend, allowing for user identification and authorization.
+Secure QuickBooks OAuth: The QuickBooks OAuth flow will be tied to a user's session. Once a user authorizes access, their access_token and refresh_token are encrypted and stored in a dedicated Supabase table linked to their user ID. This ensures that each user's connection to QuickBooks is isolated and secure.
+Database Schema for Auth and Tokens
+We'll use Supabase's PostgreSQL database to store user-related data.
+profiles: Extends the default auth.users table.
+id (uuid, Foreign Key to auth.users.id)
+full_name (text)
+avatar_url (text)
+quickbooks_tokens: Securely stores encrypted tokens for each user.
+user_id (uuid, Foreign Key to profiles.id)
+encrypted_access_token (text)
+encrypted_refresh_token (text)
+realm_id (text, QuickBooks Company ID)
+expires_at (timestampz)
+2. Feature Spotlight: Team Collaboration & Role-Based Access Control (RBAC)
+To make the tool useful for businesses, we'll add the ability for users to create teams, invite colleagues, and assign roles. This significantly complicates the database and application logic.
+Functionality
+Team Creation: A user can create a "workspace" or "team". The creator becomes the default Admin.
+Invitations: Admins can invite new members to the team via email.
+Role Management: Each team member is assigned a role:
+Admin: Can manage team members, billing, and has full access to all invoice operations.
+Accountant: Can perform all CRUD operations on invoices but cannot manage team settings.
+Viewer: Has read-only access to invoices and cannot perform any write operations.
+Database Schema for Teams and RBAC
+teams:
+id (uuid, Primary Key)
+team_name (text)
+owner_id (uuid, Foreign Key to profiles.id)
+team_members: A pivot table linking users to teams.
+team_id (uuid, Foreign Key to teams.id)
+user_id (uuid, Foreign Key to profiles.id)
+role (text, e.g., 'admin', 'accountant', 'viewer')
+Adapting AI Tools for a Multi-Tenant Environment
+The Vercel AI SDK tools from Part 1 must be updated to be "team-aware." The execute function for each tool will now require a teamId and must perform an authorization check before interacting with the QuickBooks API.
+// Example of refactoring a tool to be team-aware
+import { z } from 'zod';
+import { tool } from 'ai';
+import { checkUserRole } from './supabase-auth'; // Your custom auth checker
+
+const invoiceTools = {
+  getInvoice: tool({
+    description: 'Get details of a specific invoice by ID for the current team.',
+    parameters: z.object({
+      invoiceId: z.string().describe('The ID of the invoice to retrieve'),
+      teamId: z.string().describe('The ID of the team this invoice belongs to'),
+    }),
+    execute: async ({ invoiceId, teamId }) => {
+      const userId = getCurrentUserId(); // Get user ID from session
+      
+      // 1. Authorization Check
+      const hasPermission = await checkUserRole(userId, teamId, ['admin', 'accountant', 'viewer']);
+      if (!hasPermission) {
+        throw new Error('You do not have permission to view invoices for this team.');
+      }
+      
+      // 2. Retrieve team-specific QuickBooks tokens from Supabase
+      const qbo = await getQuickBooksClientForTeam(teamId);
+      
+      // 3. Execute QuickBooks API call
+      return await qbo.getInvoice(invoiceId);
+    }),
+  }),
+  // ... other tools like createInvoice would be refactored with similar checks,
+  // but with stricter roles (e.g., ['admin', 'accountant'])
+};
+
+
+3. Comprehensive Testing Guide
+Thoroughly testing a multi-tenant application with role-based permissions is critical to ensure security and functionality. Follow these steps to validate your implementation.
+Step 1: Simulate Multiple Users
+You cannot effectively test RBAC with a single user.
+Action: Create at least three distinct user accounts in your Supabase project using different email addresses.
+Example Personas:
+sara.lee@company.com (will be the Admin)
+mark.chen@company.com (will be the Accountant)
+emily.jones@company.com (will be the Viewer)
+Step 2: Verify Role-Based Access Control (RBAC)
+Log in as the Admin (sara.lee@company.com).
+Create a new team (e.g., "Q3 Financials").
+Invite Mark and Emily to the team, assigning them the Accountant and Viewer roles, respectively.
+Log out and log in as the Accountant (mark.chen@company.com).
+Test: Can Mark create, view, and update invoices? Use the AI chat to try these operations.
+Test: Can Mark invite a new user or change Emily's role? This should fail.
+Log out and log in as the Viewer (emily.jones@company.com).
+Test: Can Emily view a list of invoices? This should succeed.
+Test: Can Emily try to create or void an invoice? This should fail, with the AI or UI providing a clear permission error.
+Step 3: Confirm Data Isolation
+Log in as the Admin again.
+Create a second team (e.g., "Project Phoenix"). Do not invite Mark or Emily to this team.
+Create a new invoice that belongs only to the "Project Phoenix" team.
+Log in as Mark or Emily.
+Test: Can they see or query any information about the "Project Phoenix" team or its invoices? This must fail. This test confirms your Row-Level Security policies are working correctly.
+Step 4: Record a Loom Demonstration
+A screen recording is the best way to demonstrate that the security model works as expected.
+Action: Record a Loom video where you perform all the tests described in Steps 2 and 3.
+In the video, be sure to:
+Show the different browser windows or profiles for each user.
+Clearly narrate which user you are logged in as for each action.
+Demonstrate both successful actions (what a role can do) and failed actions (what a role cannot do).
+Showcase the data isolation between the two teams.
+Upgraded Implementation Roadmap
+Integrate Supabase into Existing Project: Set up a new Supabase project and connect it to your application. Define the database schema (profiles, teams, etc.) and configure RLS policies.
+Replace Mock Auth with Supabase Auth UI: Rip out any placeholder authentication and build React components for sign-up, login, and profile management using the supabase-js library.
+Refactor QuickBooks OAuth Flow: Modify the existing OAuth flow to associate QuickBooks tokens with the authenticated Supabase user, storing them securely in the quickbooks_tokens table.
+Build Team Management UI: Add new interfaces for users to create teams, invite members, and manage roles.
+Refactor AI Tools for Multi-Tenancy: Modify the existing invoiceTools to be team-aware, adding teamId to their parameters and implementing RBAC checks within their execute functions.
+Update Chat Context: Modify the chat UI to be aware of the currently selected team. The teamId must be passed along with every user prompt to the AI model.
+Enhance Error Handling: Add specific error handling for authorization failures (ToolExecutionError for permission denied) and team-not-found scenarios.
+Multi-User Security Validation: Execute the comprehensive testing guide to ensure all RBAC and data isolation policies are working correctly. Record the Loom video as proof of a successful implementation.
+localStorage.clear(); sessionStorage.clear(); window.location.reload();
