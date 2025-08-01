@@ -1,0 +1,27 @@
+# Docker Compose configuration for Invoice Bot
+# This file defines how to run your application with Docker
+
+version: '3.8'
+
+services:
+  # Define your main application service
+  invoice-bot:
+    # Build the Docker image using the Dockerfile in the current directory
+    build: .
+    
+    # Port mapping: host_port:container_port
+    # This makes your app accessible on localhost:3000
+    ports:
+      - "3000:3000"
+    
+    # Environment variables for the container
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    
+    # Restart policy: restart the container unless manually stopped
+    restart: unless-stopped
+    
+    # Give your container a friendly name
+    container_name: invoice-bot 

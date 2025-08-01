@@ -13,6 +13,9 @@
   "dependencies": {
     "@ai-sdk/openai": "^1.3.23",
     "@repo/ui": "*",
+    "@supabase/auth-ui-react": "^0.4.7",
+    "@supabase/auth-ui-shared": "^0.1.8",
+    "@supabase/supabase-js": "^2.53.0",
     "ai": "latest",
     "next": "^15.3.0",
     "node-quickbooks": "^2.0.46",
